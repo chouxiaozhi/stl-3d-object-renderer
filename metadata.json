@@ -1,0 +1,5 @@
+{
+  "name": "STL 3D Object Renderer (three.js)",
+  "description": "基于three.js的STL三维对象解析与渲染系统 - 毕业设计项目",
+  "requestFramePermissions": []
+}
