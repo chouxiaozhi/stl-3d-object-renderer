@@ -1,6 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { BarChart3, Box, CheckCircle2, Clock3, Github, HelpCircle, LoaderCircle } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDown,
+  BarChart3,
+  Box,
+  CheckCircle2,
+  Clock3,
+  Github,
+  HelpCircle,
+  LoaderCircle,
+  ShieldCheck,
+  Workflow,
+} from 'lucide-react';
 import { Controls } from './components/Controls';
 import { FileUpload, SampleModels } from './components/FileUpload';
 import { Viewer } from './components/Viewer';
@@ -57,9 +70,45 @@ const formatDimension = (value?: number) => {
   return value.toFixed(2);
 };
 
+const getProgressValue = (info: ParseProcessInfo) => {
+  if (info.steps.length === 0) return 0;
+
+  const doneCount = info.steps.filter((step) => step.status === 'done').length;
+  const hasActive = info.steps.some((step) => step.status === 'active');
+  const base = doneCount / info.steps.length;
+
+  if (info.status === 'success') return 100;
+  if (info.status === 'error') return Math.round(base * 100);
+  if (hasActive) return Math.min(99, Math.round((base + 0.12) * 100));
+
+  return Math.round(base * 100);
+};
+
+const getFormatDescription = (format?: string) => {
+  if (format === 'ASCII STL') {
+    return 'ASCII STL 是文本格式，便于调试和人工检查，但文件体积通常更大。';
+  }
+
+  if (format === 'Binary STL') {
+    return 'Binary STL 是二进制格式，体积更小、读取更快，更适合复杂模型展示。';
+  }
+
+  return '系统会自动识别 STL 格式，并分别走对应的解析流程。';
+};
+
 function ParseStatusPanel({ info }: { info: ParseProcessInfo }) {
+  const progressValue = getProgressValue(info);
+  const statusChipClass =
+    info.status === 'success'
+      ? 'bg-emerald-500/15 text-emerald-300'
+      : info.status === 'error'
+        ? 'bg-red-500/15 text-red-300'
+        : 'bg-amber-500/15 text-amber-300';
+  const successRate =
+    info.status === 'success' ? '100%' : info.status === 'error' ? '0%' : `${progressValue}%`;
+
   return (
-    <div className="absolute left-6 top-6 z-10 w-[320px] rounded-2xl border border-slate-700/80 bg-slate-900/85 p-4 shadow-2xl backdrop-blur-md">
+    <div className="absolute left-6 top-6 z-10 max-h-[calc(100%-3rem)] w-[360px] overflow-y-auto rounded-3xl border border-slate-700/80 bg-slate-900/88 p-4 shadow-2xl backdrop-blur-md">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <div className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
@@ -69,69 +118,158 @@ function ParseStatusPanel({ info }: { info: ParseProcessInfo }) {
           <div className="text-lg font-semibold text-slate-100">{info.modelName}</div>
           <p className="mt-1 text-xs leading-5 text-slate-400">{info.message}</p>
         </div>
-        <div
-          className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${
-            info.status === 'success'
-              ? 'bg-emerald-500/15 text-emerald-300'
-              : info.status === 'error'
-                ? 'bg-red-500/15 text-red-300'
-                : 'bg-amber-500/15 text-amber-300'
-          }`}
-        >
+        <div className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${statusChipClass}`}>
           {info.status === 'success' ? '完成' : info.status === 'error' ? '失败' : '进行中'}
         </div>
       </div>
 
-      <div className="space-y-2">
-        {info.steps.map((step) => (
+      <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-3">
+        <div className="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <span className="flex items-center gap-2">
+            <Activity className="h-3.5 w-3.5" />
+            解析进度
+          </span>
+          <span className="text-slate-300">{progressValue}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
           <div
-            key={step.key}
-            className={`rounded-xl border px-3 py-2 ${
-              step.status === 'done'
-                ? 'border-emerald-500/30 bg-emerald-500/8'
-                : step.status === 'active'
-                  ? 'border-amber-500/30 bg-amber-500/8'
-                  : step.status === 'error'
-                    ? 'border-red-500/30 bg-red-500/8'
-                    : 'border-slate-800 bg-slate-950/40'
+            className={`h-full rounded-full transition-all duration-500 ${
+              info.status === 'error' ? 'bg-red-400' : 'bg-emerald-400'
             }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm text-slate-200">
-                {step.status === 'done' ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                ) : step.status === 'active' ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin text-amber-400" />
-                ) : step.status === 'error' ? (
-                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500/20 text-[10px] font-bold text-red-300">
-                    !
-                  </span>
-                ) : (
-                  <span className="h-2 w-2 rounded-full bg-slate-600" />
-                )}
-                <span>{step.title}</span>
-              </div>
-              <span className="text-[11px] text-slate-500">{formatMs(step.durationMs)}</span>
-            </div>
-            {step.detail && <div className="mt-1 pl-6 text-[11px] text-slate-400">{step.detail}</div>}
+            style={{ width: `${progressValue}%` }}
+          />
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">流程完成率</div>
+            <div className="font-semibold text-slate-100">{progressValue}%</div>
           </div>
-        ))}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">解析成功率</div>
+            <div className="font-semibold text-slate-100">{successRate}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">当前格式</div>
+            <div className="font-semibold text-slate-100">{info.metrics?.format ?? '--'}</div>
+          </div>
+        </div>
       </div>
 
-      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-3">
+        <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Workflow className="h-3.5 w-3.5" />
+          解析流程图
+        </div>
+
+        <div className="space-y-2">
+          {info.steps.map((step, index) => (
+            <React.Fragment key={step.key}>
+              <div
+                className={`rounded-2xl border px-3 py-3 transition-all ${
+                  step.status === 'done'
+                    ? 'border-emerald-500/30 bg-emerald-500/10'
+                    : step.status === 'active'
+                      ? 'border-amber-500/30 bg-amber-500/10'
+                      : step.status === 'error'
+                        ? 'border-red-500/30 bg-red-500/10'
+                        : 'border-slate-800 bg-slate-900/60'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${
+                      step.status === 'done'
+                        ? 'bg-emerald-500/20 text-emerald-300'
+                        : step.status === 'active'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : step.status === 'error'
+                            ? 'bg-red-500/20 text-red-300'
+                            : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {step.status === 'done' ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : step.status === 'active' ? (
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                    ) : step.status === 'error' ? (
+                      <AlertTriangle className="h-4 w-4" />
+                    ) : (
+                      <span>{index + 1}</span>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-100">{step.title}</div>
+                      <div className="text-[11px] text-slate-500">{formatMs(step.durationMs)}</div>
+                    </div>
+                    <div className="mt-1 text-[11px] leading-5 text-slate-400">
+                      {step.detail ?? '等待进入该步骤'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {index < info.steps.length - 1 && (
+                <div className="flex justify-center">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-800 bg-slate-950/60 text-slate-500">
+                    <ArrowDown className="h-3.5 w-3.5" />
+                  </div>
+                </div>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          格式说明
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs leading-6 text-slate-300">
+          {getFormatDescription(info.metrics?.format)}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
           <Clock3 className="h-3.5 w-3.5" />
           解析结果
         </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-300">
-          <div>格式: {info.metrics?.format ?? '--'}</div>
-          <div>大小: {formatBytes(info.metrics?.fileSizeBytes)}</div>
-          <div>顶点: {info.metrics?.vertices?.toLocaleString() ?? '--'}</div>
-          <div>三角面: {info.metrics?.triangles?.toLocaleString() ?? '--'}</div>
-          <div>X尺寸: {formatDimension(info.metrics?.dimensions?.x)}</div>
-          <div>Y尺寸: {formatDimension(info.metrics?.dimensions?.y)}</div>
-          <div>Z尺寸: {formatDimension(info.metrics?.dimensions?.z)}</div>
-          <div>总耗时: {formatMs(info.metrics?.totalTimeMs)}</div>
+        <div className="grid grid-cols-2 gap-2 text-[11px]">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">格式</div>
+            <div className="font-semibold text-slate-100">{info.metrics?.format ?? '--'}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">文件大小</div>
+            <div className="font-semibold text-slate-100">{formatBytes(info.metrics?.fileSizeBytes)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">顶点数</div>
+            <div className="font-semibold text-slate-100">{info.metrics?.vertices?.toLocaleString() ?? '--'}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">三角面数</div>
+            <div className="font-semibold text-slate-100">{info.metrics?.triangles?.toLocaleString() ?? '--'}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">X 方向尺寸</div>
+            <div className="font-semibold text-slate-100">{formatDimension(info.metrics?.dimensions?.x)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">Y 方向尺寸</div>
+            <div className="font-semibold text-slate-100">{formatDimension(info.metrics?.dimensions?.y)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">Z 方向尺寸</div>
+            <div className="font-semibold text-slate-100">{formatDimension(info.metrics?.dimensions?.z)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2">
+            <div className="mb-1 text-slate-500">总耗时</div>
+            <div className="font-semibold text-slate-100">{formatMs(info.metrics?.totalTimeMs)}</div>
+          </div>
         </div>
       </div>
     </div>
