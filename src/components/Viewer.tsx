@@ -2,15 +2,27 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { SceneSettings } from '../types';
+import { ParseMetrics, ParseProcessInfo, ParseStepInfo, SceneSettings } from '../types';
 
 interface ViewerProps {
+  modelName: string;
   modelUrl: string | null;
   settings: SceneSettings;
   onModelLoaded?: (info: { vertices: number; triangles: number }) => void;
+  onParseUpdate?: (info: ParseProcessInfo) => void;
 }
 
-export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoaded }) => {
+const createParseSteps = (): ParseStepInfo[] => [
+  { key: 'read', title: '读取 STL 文件', status: 'pending' },
+  { key: 'detect', title: '识别文件格式', status: 'pending' },
+  { key: 'parse', title: '解析三角面数据', status: 'pending' },
+  { key: 'normalize', title: '归一化与几何计算', status: 'pending' },
+  { key: 'render', title: '生成渲染对象', status: 'pending' },
+];
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+export const Viewer: React.FC<ViewerProps> = ({ modelName, modelUrl, settings, onModelLoaded, onParseUpdate }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const loaderRef = useRef<STLLoader | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -38,26 +50,27 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
 
   const normalizeGeometry = (geometry: THREE.BufferGeometry) => {
     geometry.computeBoundingBox();
+    const sourceBoundingBox = geometry.boundingBox;
 
-    const boundingBox = geometry.boundingBox;
-    if (!boundingBox) return geometry;
+    let dimensions = { x: 0, y: 0, z: 0 };
+    if (sourceBoundingBox) {
+      const size = sourceBoundingBox.getSize(new THREE.Vector3());
+      dimensions = { x: size.x, y: size.y, z: size.z };
+      const maxDim = Math.max(size.x, size.y, size.z);
 
-    const size = boundingBox.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-
-    geometry.center();
-
-    if (maxDim > 0) {
-      const targetSize = 2.5;
-      const scale = targetSize / maxDim;
-      geometry.scale(scale, scale, scale);
+      geometry.center();
+      if (maxDim > 0) {
+        const targetSize = 2.5;
+        const scale = targetSize / maxDim;
+        geometry.scale(scale, scale, scale);
+      }
     }
 
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
     geometry.computeVertexNormals();
 
-    return geometry;
+    return dimensions;
   };
 
   const updateBoundingBox = () => {
@@ -108,7 +121,7 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
 
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
     const fov = cameraRef.current.fov * (Math.PI / 180);
-    const distance = Math.max(maxDim / (2 * Math.tan(fov / 2)) * 1.8, 4);
+    const distance = Math.max((maxDim / (2 * Math.tan(fov / 2))) * 1.8, 4);
 
     cameraRef.current.position.set(distance, distance, distance);
     cameraRef.current.near = Math.max(maxDim / 100, 0.01);
@@ -177,7 +190,6 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
     if (!sceneRef.current) return;
 
     disposeCurrentModel(false);
-
     const model = createModelObject(geometry);
     sceneRef.current.add(model);
     modelRef.current = model;
@@ -187,6 +199,28 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
     if (resetCamera) {
       fitCameraToModel();
     }
+  };
+
+  const emitParseState = ({
+    modelName,
+    status,
+    message,
+    steps,
+    metrics,
+  }: {
+    modelName: string;
+    status: 'idle' | 'loading' | 'success' | 'error';
+    message: string;
+    steps: ParseStepInfo[];
+    metrics?: ParseMetrics;
+  }) => {
+    onParseUpdate?.({
+      modelName,
+      status,
+      message,
+      steps: steps.map((step) => ({ ...step })),
+      metrics,
+    });
   };
 
   useEffect(() => {
@@ -346,22 +380,156 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
     if (!isSceneReady || !modelUrl || !loaderRef.current) return;
 
     let disposed = false;
+    const steps = createParseSteps();
+    const metrics: ParseMetrics = {};
+    const startedAt = performance.now();
+
+    const setStepState = async (
+      key: string,
+      status: ParseStepInfo['status'],
+      detail?: string,
+      durationMs?: number,
+      message?: string,
+    ) => {
+      const step = steps.find((item) => item.key === key);
+      if (!step || disposed) return;
+
+      step.status = status;
+      step.detail = detail;
+      step.durationMs = durationMs;
+
+      emitParseState({
+        modelName,
+        status: status === 'error' ? 'error' : 'loading',
+        message: message ?? '正在执行 STL 解析流程',
+        steps,
+        metrics,
+      });
+
+      await nextFrame();
+    };
+
+    const markFollowingStepsAsPending = (failedKey?: string) => {
+      let startMarking = failedKey === undefined;
+      steps.forEach((step) => {
+        if (startMarking && step.status === 'pending') {
+          step.status = 'pending';
+        }
+        if (step.key === failedKey) {
+          startMarking = true;
+        }
+      });
+    };
 
     const loadModel = async () => {
       setError(null);
 
-      try {
-        const geometry = await loaderRef.current!.loadAsync(modelUrl);
-        normalizeGeometry(geometry);
+      emitParseState({
+        modelName,
+        status: 'loading',
+        message: '开始解析 STL 文件',
+        steps,
+        metrics,
+      });
 
+      try {
+        const readStartedAt = performance.now();
+        await setStepState('read', 'active', '正在读取文件内容', undefined, '正在读取 STL 文件');
+
+        const response = await fetch(modelUrl);
+        if (!response.ok) {
+          throw new Error(`网络请求失败: ${response.status} ${response.statusText}`);
+        }
+
+        const buffer = await response.arrayBuffer();
+        metrics.fileSizeBytes = buffer.byteLength;
+        await setStepState(
+          'read',
+          'done',
+          `已读取 ${Math.max(buffer.byteLength / 1024, 1).toFixed(1)} KB 数据`,
+          performance.now() - readStartedAt,
+          '文件读取完成，准备识别格式',
+        );
+
+        const detectStartedAt = performance.now();
+        await setStepState('detect', 'active', '检测 ASCII / Binary STL', undefined, '正在识别 STL 文件格式');
+
+        const head = new TextDecoder().decode(buffer.slice(0, Math.min(256, buffer.byteLength))).trim().toLowerCase();
+        const isAscii = head.startsWith('solid') && head.includes('facet');
+        metrics.format = isAscii ? 'ASCII STL' : 'Binary STL';
+
+        await setStepState(
+          'detect',
+          'done',
+          `识别结果: ${metrics.format}`,
+          performance.now() - detectStartedAt,
+          '文件格式识别完成，准备解析几何数据',
+        );
+
+        const parseStartedAt = performance.now();
+        await setStepState('parse', 'active', '提取三角面与顶点数据', undefined, '正在解析三角面数据');
+
+        const geometry = loaderRef.current!.parse(buffer);
         if (disposed) {
           geometry.dispose();
           return;
         }
 
+        metrics.vertices = geometry.attributes.position.count;
+        metrics.triangles = geometry.attributes.position.count / 3;
+
+        await setStepState(
+          'parse',
+          'done',
+          `顶点 ${metrics.vertices.toLocaleString()}，三角面 ${metrics.triangles.toLocaleString()}`,
+          performance.now() - parseStartedAt,
+          '几何数据解析完成，准备执行归一化处理',
+        );
+
+        const normalizeStartedAt = performance.now();
+        await setStepState(
+          'normalize',
+          'active',
+          '计算包围盒、法向量并执行归一化',
+          undefined,
+          '正在进行几何归一化与属性计算',
+        );
+
+        const dimensions = normalizeGeometry(geometry);
+        metrics.dimensions = dimensions;
+
+        await setStepState(
+          'normalize',
+          'done',
+          `尺寸 X:${dimensions.x.toFixed(2)} Y:${dimensions.y.toFixed(2)} Z:${dimensions.z.toFixed(2)}`,
+          performance.now() - normalizeStartedAt,
+          '几何处理完成，准备生成渲染对象',
+        );
+
+        const renderStartedAt = performance.now();
+        await setStepState('render', 'active', '创建 Three.js 渲染对象', undefined, '正在生成渲染对象');
+
         disposeCurrentModel(true);
         geometryRef.current = geometry;
         renderGeometry(geometry, true);
+
+        metrics.totalTimeMs = performance.now() - startedAt;
+
+        await setStepState(
+          'render',
+          'done',
+          '模型已加入场景并完成相机自适应',
+          performance.now() - renderStartedAt,
+          'STL 解析完成，结果已显示在场景中',
+        );
+
+        emitParseState({
+          modelName,
+          status: 'success',
+          message: 'STL 解析完成，左侧展示了完整解析结果',
+          steps,
+          metrics,
+        });
 
         onModelLoaded?.({
           vertices: geometry.attributes.position.count,
@@ -373,6 +541,24 @@ export const Viewer: React.FC<ViewerProps> = ({ modelUrl, settings, onModelLoade
         const message = err instanceof Error ? err.message : '加载模型时发生未知错误';
         console.error('An error happened during loading:', err);
         setError(message);
+
+        const activeStep = steps.find((step) => step.status === 'active') ?? steps.find((step) => step.status === 'pending');
+        if (activeStep) {
+          activeStep.status = 'error';
+          activeStep.detail = message;
+        }
+
+        markFollowingStepsAsPending(activeStep?.key);
+        metrics.totalTimeMs = performance.now() - startedAt;
+
+        emitParseState({
+          modelName,
+          status: 'error',
+          message,
+          steps,
+          metrics,
+        });
+
         onModelLoaded?.({ vertices: 0, triangles: 0 });
       }
     };

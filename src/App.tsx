@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Box, Github, HelpCircle } from 'lucide-react';
+import { BarChart3, Box, CheckCircle2, Clock3, Github, HelpCircle, LoaderCircle } from 'lucide-react';
 import { Controls } from './components/Controls';
 import { FileUpload, SampleModels } from './components/FileUpload';
 import { Viewer } from './components/Viewer';
-import { ModelInfo, SceneSettings } from './types';
+import { ModelInfo, ParseProcessInfo, ParseStepInfo, SceneSettings } from './types';
 
 const DEFAULT_SETTINGS: SceneSettings = {
   color: '#10b981',
@@ -25,11 +25,125 @@ const DEFAULT_MODEL: ModelInfo = {
   url: '/models/cube.stl',
 };
 
+const createInitialParseSteps = (): ParseStepInfo[] => [
+  { key: 'read', title: '读取 STL 文件', status: 'pending' },
+  { key: 'detect', title: '识别文件格式', status: 'pending' },
+  { key: 'parse', title: '解析三角面数据', status: 'pending' },
+  { key: 'normalize', title: '归一化与几何计算', status: 'pending' },
+  { key: 'render', title: '生成渲染对象', status: 'pending' },
+];
+
+const createInitialParseInfo = (modelName: string): ParseProcessInfo => ({
+  modelName,
+  status: 'loading',
+  message: '等待开始解析',
+  steps: createInitialParseSteps(),
+});
+
+const formatBytes = (bytes?: number) => {
+  if (!bytes) return '--';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+const formatMs = (value?: number) => {
+  if (value === undefined) return '--';
+  return `${value.toFixed(1)} ms`;
+};
+
+const formatDimension = (value?: number) => {
+  if (value === undefined) return '--';
+  return value.toFixed(2);
+};
+
+function ParseStatusPanel({ info }: { info: ParseProcessInfo }) {
+  return (
+    <div className="absolute left-6 top-6 z-10 w-[320px] rounded-2xl border border-slate-700/80 bg-slate-900/85 p-4 shadow-2xl backdrop-blur-md">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <div className="mb-1 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+            <BarChart3 className="h-3.5 w-3.5" />
+            解析过程
+          </div>
+          <div className="text-lg font-semibold text-slate-100">{info.modelName}</div>
+          <p className="mt-1 text-xs leading-5 text-slate-400">{info.message}</p>
+        </div>
+        <div
+          className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider ${
+            info.status === 'success'
+              ? 'bg-emerald-500/15 text-emerald-300'
+              : info.status === 'error'
+                ? 'bg-red-500/15 text-red-300'
+                : 'bg-amber-500/15 text-amber-300'
+          }`}
+        >
+          {info.status === 'success' ? '完成' : info.status === 'error' ? '失败' : '进行中'}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {info.steps.map((step) => (
+          <div
+            key={step.key}
+            className={`rounded-xl border px-3 py-2 ${
+              step.status === 'done'
+                ? 'border-emerald-500/30 bg-emerald-500/8'
+                : step.status === 'active'
+                  ? 'border-amber-500/30 bg-amber-500/8'
+                  : step.status === 'error'
+                    ? 'border-red-500/30 bg-red-500/8'
+                    : 'border-slate-800 bg-slate-950/40'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm text-slate-200">
+                {step.status === 'done' ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                ) : step.status === 'active' ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin text-amber-400" />
+                ) : step.status === 'error' ? (
+                  <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-red-500/20 text-[10px] font-bold text-red-300">
+                    !
+                  </span>
+                ) : (
+                  <span className="h-2 w-2 rounded-full bg-slate-600" />
+                )}
+                <span>{step.title}</span>
+              </div>
+              <span className="text-[11px] text-slate-500">{formatMs(step.durationMs)}</span>
+            </div>
+            {step.detail && <div className="mt-1 pl-6 text-[11px] text-slate-400">{step.detail}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Clock3 className="h-3.5 w-3.5" />
+          解析结果
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-300">
+          <div>格式: {info.metrics?.format ?? '--'}</div>
+          <div>大小: {formatBytes(info.metrics?.fileSizeBytes)}</div>
+          <div>顶点: {info.metrics?.vertices?.toLocaleString() ?? '--'}</div>
+          <div>三角面: {info.metrics?.triangles?.toLocaleString() ?? '--'}</div>
+          <div>X尺寸: {formatDimension(info.metrics?.dimensions?.x)}</div>
+          <div>Y尺寸: {formatDimension(info.metrics?.dimensions?.y)}</div>
+          <div>Z尺寸: {formatDimension(info.metrics?.dimensions?.z)}</div>
+          <div>总耗时: {formatMs(info.metrics?.totalTimeMs)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [settings, setSettings] = useState<SceneSettings>(DEFAULT_SETTINGS);
   const [currentModel, setCurrentModel] = useState<ModelInfo>(DEFAULT_MODEL);
   const [modelStats, setModelStats] = useState<{ vertices: number; triangles: number } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [parseInfo, setParseInfo] = useState<ParseProcessInfo>(() => createInitialParseInfo(DEFAULT_MODEL.name));
   const uploadedModelUrlRef = useRef<string | null>(null);
 
   const revokeUploadedModelUrl = (nextUrl?: string) => {
@@ -41,8 +155,11 @@ export default function App() {
 
   const handleModelSelect = (url: string, name: string) => {
     setIsLoading(true);
+    setModelStats(null);
+    setParseInfo(createInitialParseInfo(name));
 
     if (url.startsWith('blob:')) {
+      revokeUploadedModelUrl(url);
       uploadedModelUrlRef.current = url;
     } else {
       revokeUploadedModelUrl();
@@ -80,13 +197,17 @@ export default function App() {
       <main className="relative flex flex-1 overflow-hidden">
         <div className="relative flex-1">
           <Viewer
+            modelName={currentModel.name}
             modelUrl={currentModel.url}
             settings={settings}
+            onParseUpdate={setParseInfo}
             onModelLoaded={(stats) => {
               setModelStats(stats);
               setIsLoading(false);
             }}
           />
+
+          <ParseStatusPanel info={parseInfo} />
 
           <AnimatePresence>
             {isLoading && (
@@ -94,11 +215,11 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/50 backdrop-blur-sm"
+                className="absolute inset-0 z-[5] flex items-center justify-center bg-slate-950/35 backdrop-blur-[1px]"
               >
                 <div className="flex flex-col items-center gap-4">
                   <div className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-500/20 border-t-emerald-500" />
-                  <p className="animate-pulse text-sm font-medium text-emerald-400">正在加载 STL 模型...</p>
+                  <p className="animate-pulse text-sm font-medium text-emerald-400">正在解析 STL 模型...</p>
                 </div>
               </motion.div>
             )}
