@@ -10,6 +10,7 @@ interface ViewerProps {
   settings: SceneSettings;
   onModelLoaded?: (info: { vertices: number; triangles: number }) => void;
   onParseUpdate?: (info: ParseProcessInfo) => void;
+  onFpsUpdate?: (fps: number) => void;
 }
 
 const createParseSteps = (): ParseStepInfo[] => [
@@ -22,7 +23,14 @@ const createParseSteps = (): ParseStepInfo[] => [
 
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-export const Viewer: React.FC<ViewerProps> = ({ modelName, modelUrl, settings, onModelLoaded, onParseUpdate }) => {
+export const Viewer: React.FC<ViewerProps> = ({
+  modelName,
+  modelUrl,
+  settings,
+  onModelLoaded,
+  onParseUpdate,
+  onFpsUpdate,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const loaderRef = useRef<STLLoader | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -282,10 +290,21 @@ export const Viewer: React.FC<ViewerProps> = ({ modelName, modelUrl, settings, o
     setIsSceneReady(true);
 
     let animationFrameId = 0;
-    const animate = () => {
+    let frameCount = 0;
+    let fpsWindowStart = performance.now();
+
+    const animate = (now = performance.now()) => {
       animationFrameId = requestAnimationFrame(animate);
       controls.update();
       renderer.render(scene, camera);
+
+      frameCount += 1;
+      const elapsed = now - fpsWindowStart;
+      if (elapsed >= 500) {
+        onFpsUpdate?.(Math.round((frameCount * 1000) / elapsed));
+        frameCount = 0;
+        fpsWindowStart = now;
+      }
     };
     animate();
 
@@ -309,6 +328,7 @@ export const Viewer: React.FC<ViewerProps> = ({ modelName, modelUrl, settings, o
       resizeObserver.disconnect();
       controls.dispose();
       disposeCurrentModel(true);
+      onFpsUpdate?.(0);
 
       if (rendererRef.current) {
         rendererRef.current.dispose();
@@ -455,6 +475,7 @@ export const Viewer: React.FC<ViewerProps> = ({ modelName, modelUrl, settings, o
         await setStepState('detect', 'active', '检测 ASCII / Binary STL', undefined, '正在识别 STL 文件格式');
 
         const head = new TextDecoder().decode(buffer.slice(0, Math.min(256, buffer.byteLength))).trim().toLowerCase();
+        // ASCII STL 规范中会直接使用 "solid" 和 "facet" 作为文本关键字，这里必须按原始英文标记识别。
         const isAscii = head.startsWith('solid') && head.includes('facet');
         metrics.format = isAscii ? 'ASCII STL' : 'Binary STL';
 
